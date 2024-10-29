@@ -138,3 +138,124 @@ func main() {
 		fmt.Println("Restore successful!")
 	}
 }
+
+
+
+
+////
+
+package main
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
+
+// listBackups liệt kê các bản backup của nhiều database trong thư mục backupDir.
+func listBackups(backupDir string) (map[string][]string, error) {
+	backups := make(map[string][]string)
+
+	// Duyệt qua các thư mục con trong backupDir
+	err := filepath.WalkDir(backupDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Kiểm tra nếu path là thư mục chứa bản backup của một database
+		if d.IsDir() && path != backupDir {
+			// Lấy tên database từ thư mục con
+			dbName := filepath.Base(path)
+			
+			// Lấy danh sách bản backup trong thư mục của database đó
+			var dbBackups []string
+			filepath.WalkDir(path, func(subPath string, info fs.DirEntry, err error) error {
+				if info.IsDir() && subPath != path {
+					dbBackups = append(dbBackups, subPath)
+				}
+				return nil
+			})
+			backups[dbName] = dbBackups
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to list backups: %w", err)
+	}
+
+	return backups, nil
+}
+
+func main() {
+	// Thư mục chứa các bản backup
+	backupDir := "/path/to/backup"
+
+	// Gọi hàm listBackups
+	backups, err := listBackups(backupDir)
+	if err != nil {
+		fmt.Println("Error:", err)
+	} else {
+		fmt.Println("List of backups:")
+		for dbName, dbBackups := range backups {
+			fmt.Printf("Database: %s\n", dbName)
+			for _, backup := range dbBackups {
+				fmt.Printf("  - %s\n", backup)
+			}
+		}
+	}
+}
+
+///
+package main
+
+import (
+	"fmt"
+	"os/exec"
+	"path/filepath"
+)
+
+// restoreMongoDBs phục hồi các database từ các bản backup trong backupDir.
+func restoreMongoDBs(uri string, backupDir string) error {
+	// Duyệt qua các thư mục trong backupDir
+	err := filepath.WalkDir(backupDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Nếu thư mục con là một database
+		if d.IsDir() && path != backupDir {
+			dbName := filepath.Base(path)
+
+			// Phục hồi từng database từ thư mục backup
+			cmd := exec.Command("mongorestore", "--uri="+uri, "--db="+dbName, path)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("restore failed for database %s: %w", dbName, err)
+			}
+			fmt.Printf("Restore completed for database: %s from %s\n", dbName, path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to restore backups: %w", err)
+	}
+
+	return nil
+}
+
+func main() {
+	// Thông tin kết nối MongoDB và thư mục chứa các bản backup
+	uri := "mongodb://localhost:27017"
+	backupDir := "/path/to/backup"
+
+	// Gọi hàm restore
+	if err := restoreMongoDBs(uri, backupDir); err != nil {
+		fmt.Println("Error:", err)
+	} else {
+		fmt.Println("Restore for all databases successful!")
+	}
+}
+
+
