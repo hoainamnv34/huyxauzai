@@ -1,0 +1,178 @@
+package controllers
+
+import (
+	"fmt"
+	"io/fs"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	"bms-monitoring/internal/pkg/config"
+	"github.com/gin-gonic/gin"
+)
+
+// ensureBackupDirExists kiểm tra và tạo thư mục backup nếu chưa tồn tại.
+func ensureBackupDirExists(backupDir string) error {
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		err = os.MkdirAll(backupDir, os.ModePerm)
+		if err != nil {
+			return fmt.Errorf("failed to create backup dir: %w", err)
+		}
+		fmt.Println("Backup directory created.")
+	}
+	return nil
+}
+
+// backupMongoDB tạo bản backup cho các database.
+func backupMongoDB(uri string, dbNames []string, backupDir string) error {
+	// Tạo timestamp để sử dụng chung cho tất cả các collection trong lần backup này
+	timestamp := time.Now().Format("20060102_150405")
+	baseBackupPath := filepath.Join(backupDir, timestamp)
+
+	for _, dbName := range dbNames {
+		// Tạo thư mục cho từng database
+		backupPath := filepath.Join(baseBackupPath, dbName)
+
+		// Tạo lệnh mongodump cho mỗi database
+		cmd := exec.Command("mongodump", "--uri="+uri, "--db="+dbName, "--out="+backupPath)
+
+		// Chạy lệnh và kiểm tra lỗi
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("backup failed for database %s: %w", dbName, err)
+		}
+
+		fmt.Printf("Backup completed for database: %s at %s\n", dbName, backupPath)
+	}
+	return nil
+}
+
+// BackupDB godoc
+//
+//	@Summary	Create backup data
+//	@Tags		backup-restore
+//	@Produce	json
+//	@Success	200	{object}	[]models.VersionToJson
+//	@Router		/backup [get]
+func BackupDB(c *gin.Context) {
+	fmt.Println("[INFO] call /backup")
+	uri := config.GetConfig().Backup.SourceUri
+	dbNames := config.GetConfig().Backup.DbNames
+	backupDir := config.GetConfig().Backup.BackupDir
+
+	if err := ensureBackupDirExists(backupDir); err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, "Error creating backup directory")
+		return
+	}
+
+	// Gọi hàm backup
+	if err := backupMongoDB(uri, dbNames, backupDir); err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, "Error during backup")
+		return
+	}
+	fmt.Println("Backup for all collections successful!")
+	c.JSON(http.StatusOK, "Backup for all collections successful!")
+}
+
+// listBackups liệt kê danh sách các bản backup.
+func listBackups(backupDir string) ([]string, error) {
+	var folders []string
+
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list backups: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			folders = append(folders, entry.Name())
+		}
+	}
+
+	return folders, nil
+}
+
+// ListBackups godoc
+//
+//	@Summary	List all backup data
+//	@Tags		backup-restore
+//	@Produce	json
+//	@Success	200	{object}	[]models.VersionToJson
+//	@Router		/list-backups [get]
+func ListBackups(c *gin.Context) {
+	fmt.Println("[INFO] call /list-backups")
+	backupDir := config.GetConfig().Backup.BackupDir
+
+	// Gọi hàm listBackups
+	backups, err := listBackups(backupDir)
+	if err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, "Error listing backups")
+		return
+	}
+	fmt.Println("List of backups:")
+	c.JSON(http.StatusOK, backups)
+}
+
+// restoreMongoDBs phục hồi các database từ các bản backup trong backupDir.
+func restoreMongoDBs(uri, backupDir string) error {
+	err := filepath.WalkDir(backupDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Nếu thư mục con là một database
+		if d.IsDir() && path != backupDir {
+			dbName := filepath.Base(path)
+
+			// Phục hồi từng database từ thư mục backup
+			cmd := exec.Command("mongorestore", "--uri="+uri, "--db="+dbName, "--drop", path)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("restore failed for database %s: %w", dbName, err)
+			}
+			fmt.Printf("Restore completed for database: %s from %s\n", dbName, path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to restore backups: %w", err)
+	}
+
+	return nil
+}
+
+// RestoreDB godoc
+//
+//	@Summary	Restore database
+//	@Tags		backup-restore
+//	@Param		name	query	string	false	"timestamp to restore"
+//	@Produce	json
+//	@Success	200	{object}	[]models.VersionToJson
+//	@Router		/restore [get]
+func RestoreDB(c *gin.Context) {
+	fmt.Println("[INFO] call /restore")
+	uri := config.GetConfig().Backup.DestUri
+	backupDir := config.GetConfig().Backup.BackupDir
+	timestamp := c.Query("name")
+
+	// Kiểm tra timestamp có được cung cấp không
+	if timestamp == "" {
+		c.JSON(http.StatusBadRequest, "Timestamp parameter is required")
+		return
+	}
+
+	restorePath := filepath.Join(backupDir, timestamp)
+
+	// Gọi hàm restoreMongoDBs
+	if err := restoreMongoDBs(uri, restorePath); err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, "Error during restore")
+		return
+	}
+	fmt.Println("Restore for all collections successful!")
+	c.JSON(http.StatusOK, "Restore for all collections successful!")
+}
