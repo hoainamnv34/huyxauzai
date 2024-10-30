@@ -1,0 +1,170 @@
+package backup
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// BackupInfo lưu trữ thông tin của mỗi bản backup
+type BackupInfo struct {
+	Timestamp   string   `json:"timestamp"`
+	Databases   []string `json:"databases"`
+	SizeInBytes int64    `json:"size_in_bytes"`
+}
+
+// getBackupSize tính kích thước của thư mục backup
+func getBackupSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
+// GetBackupInfo tạo danh sách thông tin backup từ thư mục backupDir
+func GetBackupInfo(backupDir string) ([]BackupInfo, error) {
+	var backups []BackupInfo
+
+	// Đọc danh sách thư mục backup (mỗi thư mục tương ứng với một timestamp)
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list backups: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			timestamp := entry.Name()
+			dbPath := filepath.Join(backupDir, timestamp)
+
+			// Đọc các database trong thư mục timestamp
+			dbEntries, err := os.ReadDir(dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read backup for timestamp %s: %w", timestamp, err)
+			}
+
+			var dbNames []string
+			for _, dbEntry := range dbEntries {
+				if dbEntry.IsDir() {
+					dbNames = append(dbNames, dbEntry.Name())
+				}
+			}
+
+			// Tính kích thước của thư mục backup
+			size, err := getBackupSize(dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to calculate size for timestamp %s: %w", timestamp, err)
+			}
+
+			// Tạo thông tin backup và thêm vào danh sách
+			backup := BackupInfo{
+				Timestamp:   timestamp,
+				Databases:   dbNames,
+				SizeInBytes: size,
+			}
+			backups = append(backups, backup)
+		}
+	}
+
+	return backups, nil
+}
+
+
+
+////
+
+package controllers
+
+import (
+	"fmt"
+	"net/http"
+	"bms-monitoring/internal/pkg/config"
+	"bms-monitoring/internal/pkg/backup" // Đảm bảo thêm module mới này
+	"github.com/gin-gonic/gin"
+)
+
+// ListBackups godoc
+//
+//	@Summary	List all backup data
+//	@Tags		backup-restore
+//	@Produce	json
+//	@Success	200	{object}	[]backup.BackupInfo
+//	@Router		/list-backups [get]
+func ListBackups(c *gin.Context) {
+	fmt.Println("[INFO] call /list-backups")
+	backupDir := config.GetConfig().Backup.BackupDir
+
+	// Gọi hàm GetBackupInfo để lấy danh sách thông tin bản backup
+	backups, err := backup.GetBackupInfo(backupDir)
+	if err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, "Error retrieving backup list")
+		return
+	}
+
+	fmt.Println("List of backups with detailed information:")
+	c.JSON(http.StatusOK, backups)
+}
+
+
+////
+
+package controllers
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"bms-monitoring/internal/pkg/config"
+	"github.com/gin-gonic/gin"
+)
+
+// DeleteBackup godoc
+//
+//	@Summary	Delete a specific backup
+//	@Tags		backup-restore
+//	@Param		timestamp	query	string	true	"Timestamp of the backup to delete"
+//	@Produce	json
+//	@Success	200	{string}	string	"Backup deleted successfully"
+//	@Failure	400	{string}	string	"Invalid timestamp parameter"
+//	@Failure	404	{string}	string	"Backup not found"
+//	@Failure	500	{string}	string	"Error deleting backup"
+//	@Router		/delete-backup [delete]
+func DeleteBackup(c *gin.Context) {
+	fmt.Println("[INFO] call /delete-backup")
+
+	// Lấy timestamp từ tham số query
+	timestamp := c.Query("timestamp")
+	if timestamp == "" {
+		c.JSON(http.StatusBadRequest, "Timestamp parameter is required")
+		return
+	}
+
+	backupDir := config.GetConfig().Backup.BackupDir
+	backupPath := filepath.Join(backupDir, timestamp)
+
+	// Kiểm tra xem bản backup có tồn tại không
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, "Backup not found")
+		return
+	}
+
+	// Xóa thư mục backup
+	if err := os.RemoveAll(backupPath); err != nil {
+		fmt.Println("Error:", err)
+		c.JSON(http.StatusInternalServerError, "Error deleting backup")
+		return
+	}
+
+	fmt.Printf("Backup %s deleted successfully\n", timestamp)
+	c.JSON(http.StatusOK, "Backup deleted successfully")
+}
