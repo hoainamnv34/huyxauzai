@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Set variables
+MONGO_HOST="localhost"     # Địa chỉ host MongoDB
+MONGO_PORT="27017"         # Cổng kết nối MongoDB
+DB_NAME="afad-user-info"   # Tên database
+COLLECTION="info_privillege" # Tên collection cần backup
+BACKUP_DIR="./backup"      # Thư mục lưu trữ file backup
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S") # Dấu thời gian để đặt tên file backup
+BACKUP_FILE="${BACKUP_DIR}/${COLLECTION}_${TIMESTAMP}.json"
+
+# Tạo thư mục backup nếu chưa tồn tại
+mkdir -p "$BACKUP_DIR"
+
+# Thực hiện backup bằng mongoexport
+mongoexport --host="$MONGO_HOST" --port="$MONGO_PORT" --db="$DB_NAME" --collection="$COLLECTION" --out="$BACKUP_FILE"
+
+# Kiểm tra kết quả
+if [ $? -eq 0 ]; then
+    echo "Backup successful: $BACKUP_FILE"
+else
+    echo "Backup failed!"
+    exit 1
+fi
