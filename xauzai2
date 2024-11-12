@@ -1,178 +1,94 @@
-package controllers
+import os
+import shutil
+import subprocess
 
-import (
-	"fmt"
-	"io/fs"
-	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"time"
+def clone_and_checkout(file_path, destination_folder, branch_name):
+    """
+    Đọc danh sách repository từ file, clone và checkout branch chỉ định.
 
-	"bms-monitoring/internal/pkg/config"
-	"github.com/gin-gonic/gin"
-)
+    :param file_path: Đường dẫn đến file chứa danh sách repository.
+    :param destination_folder: Thư mục đích để clone repository.
+    :param branch_name: Tên branch để checkout.
+    """
+    os.makedirs(destination_folder, exist_ok=True)
+    os.chdir(destination_folder)
 
-// ensureBackupDirExists kiểm tra và tạo thư mục backup nếu chưa tồn tại.
-func ensureBackupDirExists(backupDir string) error {
-	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
-		err = os.MkdirAll(backupDir, os.ModePerm)
-		if err != nil {
-			return fmt.Errorf("failed to create backup dir: %w", err)
-		}
-		fmt.Println("Backup directory created.")
-	}
-	return nil
-}
+    with open(file_path, 'r') as file:
+        repos = [line.strip() for line in file if line.strip()]
 
-// backupMongoDB tạo bản backup cho các database.
-func backupMongoDB(uri string, dbNames []string, backupDir string) error {
-	// Tạo timestamp để sử dụng chung cho tất cả các collection trong lần backup này
-	timestamp := time.Now().Format("20060102_150405")
-	baseBackupPath := filepath.Join(backupDir, timestamp)
+    for repo in repos:
+        repo_url = f"https://github.com/{repo}.git"
+        repo_name = os.path.basename(repo)
+        target_path = os.path.join(destination_folder, repo_name)
 
-	for _, dbName := range dbNames {
-		// Tạo thư mục cho từng database
-		backupPath := filepath.Join(baseBackupPath, dbName)
+        if clone_repo(repo_url, target_path):
+            checkout_branch(target_path, branch_name)
 
-		// Tạo lệnh mongodump cho mỗi database
-		cmd := exec.Command("mongodump", "--uri="+uri, "--db="+dbName, "--out="+backupPath)
+def clone_repo(repo_url, target_path):
+    """Clone repository từ GitHub."""
+    try:
+        print(f"Cloning {repo_url} into {target_path}...")
+        subprocess.run(['git', 'clone', repo_url, target_path], check=True)
+        print(f"Successfully cloned {repo_url}.")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to clone {repo_url}. Error: {e}")
+        return False
 
-		// Chạy lệnh và kiểm tra lỗi
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("backup failed for database %s: %w", dbName, err)
-		}
+def checkout_branch(repo_path, branch_name):
+    """Checkout branch trong repository."""
+    try:
+        os.chdir(repo_path)
+        print(f"Checking out branch {branch_name} in {repo_path}...")
+        subprocess.run(['git', 'checkout', '-b', branch_name], check=True)
+        print(f"Successfully checked out branch {branch_name} in {repo_path}.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to checkout branch {branch_name} in {repo_path}. Error: {e}")
+    finally:
+        os.chdir('..')
 
-		fmt.Printf("Backup completed for database: %s at %s\n", dbName, backupPath)
-	}
-	return nil
-}
+def copy_template(repo_path, template_path):
+    """Copy thư mục template vào repository."""
+    try:
+        target_template_path = os.path.join(repo_path, os.path.basename(template_path))
+        if os.path.exists(target_template_path):
+            print(f"Template already exists in {repo_path}. Skipping copy.")
+            return
+        shutil.copytree(template_path, target_template_path)
+        print(f"Copied template to {repo_path}.")
+    except Exception as e:
+        print(f"Failed to copy template to {repo_path}. Error: {e}")
 
-// BackupDB godoc
-//
-//	@Summary	Create backup data
-//	@Tags		backup-restore
-//	@Produce	json
-//	@Success	200	{object}	[]models.VersionToJson
-//	@Router		/backup [get]
-func BackupDB(c *gin.Context) {
-	fmt.Println("[INFO] call /backup")
-	uri := config.GetConfig().Backup.SourceUri
-	dbNames := config.GetConfig().Backup.DbNames
-	backupDir := config.GetConfig().Backup.BackupDir
+def commit_and_push(repo_path, branch_name, commit_message="Add template files"):
+    """Commit và push các thay đổi lên GitHub."""
+    try:
+        os.chdir(repo_path)
+        subprocess.run(['git', 'add', '.'], check=True)
+        subprocess.run(['git', 'commit', '-m', commit_message], check=True)
+        subprocess.run(['git', 'push', '--set-upstream', 'origin', branch_name], check=True)
+        print(f"Successfully committed and pushed changes to branch {branch_name}.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to commit or push changes in {repo_path}. Error: {e}")
+    finally:
+        os.chdir('..')
 
-	if err := ensureBackupDirExists(backupDir); err != nil {
-		fmt.Println("Error:", err)
-		c.JSON(http.StatusInternalServerError, "Error creating backup directory")
-		return
-	}
+def main():
+    file_path = 'labels.txt'  # File chứa danh sách repo
+    destination_folder = '/path/repo'  # Thư mục đích
+    branch_name = 'test'  # Tên branch cần checkout
+    template_path = '/template'  # Đường dẫn thư mục template
 
-	// Gọi hàm backup
-	if err := backupMongoDB(uri, dbNames, backupDir); err != nil {
-		fmt.Println("Error:", err)
-		c.JSON(http.StatusInternalServerError, "Error during backup")
-		return
-	}
-	fmt.Println("Backup for all collections successful!")
-	c.JSON(http.StatusOK, "Backup for all collections successful!")
-}
+    clone_and_checkout(file_path, destination_folder, branch_name)
 
-// listBackups liệt kê danh sách các bản backup.
-func listBackups(backupDir string) ([]string, error) {
-	var folders []string
+    # Copy template, commit và push cho mỗi repo
+    with open(file_path, 'r') as file:
+        repos = [line.strip() for line in file if line.strip()]
 
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list backups: %w", err)
-	}
+    for repo in repos:
+        repo_name = os.path.basename(repo)
+        repo_path = os.path.join(destination_folder, repo_name)
+        copy_template(repo_path, template_path)
+        commit_and_push(repo_path, branch_name)
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			folders = append(folders, entry.Name())
-		}
-	}
-
-	return folders, nil
-}
-
-// ListBackups godoc
-//
-//	@Summary	List all backup data
-//	@Tags		backup-restore
-//	@Produce	json
-//	@Success	200	{object}	[]models.VersionToJson
-//	@Router		/list-backups [get]
-func ListBackups(c *gin.Context) {
-	fmt.Println("[INFO] call /list-backups")
-	backupDir := config.GetConfig().Backup.BackupDir
-
-	// Gọi hàm listBackups
-	backups, err := listBackups(backupDir)
-	if err != nil {
-		fmt.Println("Error:", err)
-		c.JSON(http.StatusInternalServerError, "Error listing backups")
-		return
-	}
-	fmt.Println("List of backups:")
-	c.JSON(http.StatusOK, backups)
-}
-
-// restoreMongoDBs phục hồi các database từ các bản backup trong backupDir.
-func restoreMongoDBs(uri, backupDir string) error {
-	err := filepath.WalkDir(backupDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Nếu thư mục con là một database
-		if d.IsDir() && path != backupDir {
-			dbName := filepath.Base(path)
-
-			// Phục hồi từng database từ thư mục backup
-			cmd := exec.Command("mongorestore", "--uri="+uri, "--db="+dbName, "--drop", path)
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("restore failed for database %s: %w", dbName, err)
-			}
-			fmt.Printf("Restore completed for database: %s from %s\n", dbName, path)
-		}
-		return nil
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to restore backups: %w", err)
-	}
-
-	return nil
-}
-
-// RestoreDB godoc
-//
-//	@Summary	Restore database
-//	@Tags		backup-restore
-//	@Param		name	query	string	false	"timestamp to restore"
-//	@Produce	json
-//	@Success	200	{object}	[]models.VersionToJson
-//	@Router		/restore [get]
-func RestoreDB(c *gin.Context) {
-	fmt.Println("[INFO] call /restore")
-	uri := config.GetConfig().Backup.DestUri
-	backupDir := config.GetConfig().Backup.BackupDir
-	timestamp := c.Query("name")
-
-	// Kiểm tra timestamp có được cung cấp không
-	if timestamp == "" {
-		c.JSON(http.StatusBadRequest, "Timestamp parameter is required")
-		return
-	}
-
-	restorePath := filepath.Join(backupDir, timestamp)
-
-	// Gọi hàm restoreMongoDBs
-	if err := restoreMongoDBs(uri, restorePath); err != nil {
-		fmt.Println("Error:", err)
-		c.JSON(http.StatusInternalServerError, "Error during restore")
-		return
-	}
-	fmt.Println("Restore for all collections successful!")
-	c.JSON(http.StatusOK, "Restore for all collections successful!")
-}
+if __name__ == '__main__':
+    main()
