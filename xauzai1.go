@@ -1,26 +1,57 @@
+import csv
 import os
 import subprocess
 
-# Đường dẫn đến file chứa danh sách repo và thư mục đích
-file_path = 'labels.txt'  # Thay bằng tên file chứa danh sách repo
-destination_folder = '/path/repo'  # Thay bằng đường dẫn thư mục đích
+def get_git_description(repo_path):
+    """
+    Lấy thông tin mô tả của git tags từ repository.
 
-# Tạo thư mục đích nếu chưa tồn tại
-os.makedirs(destination_folder, exist_ok=True)
-
-# Đọc danh sách repo từ file
-with open(file_path, 'r') as file:
-    repos = [line.strip() for line in file if line.strip()]
-
-# Clone từng repo
-for repo in repos:
-    repo_url = f"https://github.com/{repo}.git"
-    repo_name = os.path.basename(repo)
-    target_path = os.path.join(destination_folder, repo_name)
-    
+    :param repo_path: Đường dẫn đến repository.
+    :return: Chuỗi mô tả từ lệnh `git describe --tags`, hoặc thông báo lỗi nếu không thành công.
+    """
     try:
-        print(f"Cloning {repo_url} into {target_path}...")
-        subprocess.run(['git', 'clone', repo_url, target_path], check=True)
-        print(f"Successfully cloned {repo}.")
-    except subprocess.CalledProcessError:
-        print(f"Failed to clone {repo}. Please check the repository URL or your network connection.")
+        result = subprocess.run(
+            ['git', 'describe', '--tags'],
+            cwd=repo_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"Error: {e.stderr.strip()}"
+
+def write_repos_to_csv(repos, csv_file):
+    """
+    Ghi danh sách repository và kết quả `git describe --tags` ra file CSV.
+
+    :param repos: Danh sách đường dẫn repository.
+    :param csv_file: Đường dẫn file CSV để ghi.
+    """
+    try:
+        with open(csv_file, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Repository', 'Git Description'])  # Ghi header
+
+            for repo_path in repos:
+                repo_name = os.path.basename(repo_path)
+                git_description = get_git_description(repo_path)
+                writer.writerow([repo_name, git_description])
+
+        print(f"Successfully written to {csv_file}.")
+    except Exception as e:
+        print(f"Failed to write to CSV. Error: {e}")
+
+# Ví dụ sử dụng
+def main():
+    repos = [
+        '/path/to/repo1',
+        '/path/to/repo2',
+        '/path/to/repo3'
+    ]
+    csv_file = '/path/to/output/repos.csv'
+    write_repos_to_csv(repos, csv_file)
+
+if __name__ == '__main__':
+    main()
