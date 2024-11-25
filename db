@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Thông tin kết nối MongoDB
+SOURCE_IP="source_ip"
+SOURCE_PORT="27017"
+SOURCE_USER="source_user"  # Để trống nếu không dùng authentication
+SOURCE_PASSWORD="source_password"  # Để trống nếu không dùng authentication
+
+TARGET_IP="target_ip"
+TARGET_PORT="27017"
+TARGET_USER="target_user"  # Để trống nếu không dùng authentication
+TARGET_PASSWORD="target_password"  # Để trống nếu không dùng authentication
+
+# Thư mục tạm để lưu dữ liệu dump
+DUMP_DIR="/tmp/mongo_dump"
+
+# Tạo thư mục dump
+mkdir -p "$DUMP_DIR"
+
+# Bước 1: Dump dữ liệu từ MongoDB nguồn
+echo "Dumping data from source MongoDB..."
+if [ -n "$SOURCE_USER" ] && [ -n "$SOURCE_PASSWORD" ]; then
+    mongodump --host "$SOURCE_IP" --port "$SOURCE_PORT" \
+              --username "$SOURCE_USER" --password "$SOURCE_PASSWORD" \
+              --out "$DUMP_DIR"
+else
+    mongodump --host "$SOURCE_IP" --port "$SOURCE_PORT" --out "$DUMP_DIR"
+fi
+
+if [ $? -ne 0 ]; then
+    echo "Error during mongodump. Exiting..."
+    exit 1
+fi
+
+# Bước 2: Restore dữ liệu vào MongoDB đích
+echo "Restoring data to target MongoDB..."
+if [ -n "$TARGET_USER" ] && [ -n "$TARGET_PASSWORD" ]; then
+    mongorestore --host "$TARGET_IP" --port "$TARGET_PORT" \
+                 --username "$TARGET_USER" --password "$TARGET_PASSWORD" \
+                 "$DUMP_DIR"
+else
+    mongorestore --host "$TARGET_IP" --port "$TARGET_PORT" "$DUMP_DIR"
+fi
+
+if [ $? -ne 0 ]; then
+    echo "Error during mongorestore. Exiting..."
+    exit 1
+fi
+
+# Bước 3: Dọn dẹp thư mục tạm
+echo "Cleaning up temporary files..."
+rm -rf "$DUMP_DIR"
+
+echo "Data copy completed successfully!"
